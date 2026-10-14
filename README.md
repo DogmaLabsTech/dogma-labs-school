@@ -1,3 +1,7 @@
+> **This is Dogma Labs School**, Dogma Labs' fork of [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC).
+> Everything below this note is upstream's README and still says "OpenMAIC". The separate upstream clone
+> (`Projects/OpenMAIC`) was removed on 2026-10-14, so this fork is the only local copy. Agent guide: [AGENTS.md](AGENTS.md).
+
 <!-- <p align="center">
   <img src="assets/logo-horizontal.png" alt="OpenMAIC" width="420"/>
 </p> -->
