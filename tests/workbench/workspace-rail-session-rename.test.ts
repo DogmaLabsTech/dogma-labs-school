@@ -40,7 +40,10 @@ const roots: Root[] = [];
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-beforeAll(() => {
+beforeAll(async () => {
+  // The first import of the rail transforms a large component graph; do it here so
+  // the first test does not pay for it inside its own timeout.
+  await import('@/components/workbench/workspace/WorkspaceRail');
   if (!globalThis.PointerEvent) vi.stubGlobal('PointerEvent', MouseEvent);
   vi.stubGlobal(
     'ResizeObserver',
@@ -50,7 +53,7 @@ beforeAll(() => {
       disconnect() {}
     },
   );
-});
+}, 60_000);
 
 afterEach(() => {
   for (const root of roots.splice(0)) {
