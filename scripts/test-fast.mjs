@@ -32,31 +32,107 @@ const VITEST_TEST = /^tests\/.*\.test\.ts$/;
 const OTHER_TEST = /\.test\.(?:[cm]?[jt]s|[jt]sx)$/;
 // A test that reads files as text sees changes imports cannot show (source guards, css and doc checks).
 const READS_FILES = /readFileSync|readdirSync|readdir\(|import\.meta\.glob|readFile\(/;
-// A test can also scan sources by shelling out (execSync('grep -rl ... app lib')). It must import child_process,
-// call an exec function (not RegExp.exec) and hold a string that is a scanner command: one that starts with
-// grep, rg, find, ls, git grep or git ls-files, follows a pipe or &&, or is just the program name for spawn.
-const EXEC_CALL = /(?<![.\w])(?:execSync|execFileSync|spawnSync|execFile|exec|spawn)\s*\(/;
+// A test can also scan sources by shelling out (execSync('grep -rl ... app lib')). Imports cannot show that, so a
+// test that imports child_process and calls an exec function (not RegExp.exec) is read call by call:
+//  - a plain string literal command that is a scanner (grep, rg, find, ls, git grep, git ls-files, also after a
+//    pipe or &&) with only literal folders keeps the narrow rule: it is added when a changed file is under a
+//    folder the command names;
+//  - anything the script cannot read in full (a command that is not a plain string literal, `bash -c`, a scanner
+//    or shell program with a non-literal argument) makes the test run whenever any code file changes.
+const EXEC_CALL = /(?<![.\w])(execSync|execFileSync|spawnSync|execFile|exec|spawn)\s*\(/g;
 const SCANNER_LIT =
   /^\s*(?:(?:grep|rg|find|ls)(?:\s|$)|git\s+(?:grep|ls-files)\b)|(?:\||&&|;)\s*(?:grep|rg|find|ls)\s/;
-const scannerLiterals = (text) =>
-  [...text.matchAll(QUOTED)].map((m) => m[2]).filter((l) => SCANNER_LIT.test(l));
-// The argument text of each exec call, up to its closing paren.
-function execArgs(text) {
+const SCANNER_PROGRAM = /^(?:grep|rg|find|ls|git)$/;
+const SHELL_PROGRAM = /(?:^|\/)(?:ba|z|da)?sh$/;
+const PLAIN_LITERAL = /^(['"`])(?:\\.|(?!\1)[^\\\n$])*\1$/;
+// Split call arguments at top-level commas, keeping strings, brackets and ${...} whole.
+function splitArgs(argText) {
   const out = [];
-  const re = new RegExp(EXEC_CALL.source, 'g');
-  for (let m = re.exec(text); m; m = re.exec(text)) {
+  let depth = 0;
+  let quote = null;
+  let start = 0;
+  for (let i = 0; i < argText.length; i++) {
+    const c = argText[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+    } else if (c === "'" || c === '"' || c === '`') quote = c;
+    else if ('([{'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth--;
+    else if (c === ',' && depth === 0) {
+      out.push(argText.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  out.push(argText.slice(start).trim());
+  return out.filter((a) => a !== '');
+}
+function execCalls(text) {
+  const out = [];
+  for (const m of text.matchAll(EXEC_CALL)) {
     let depth = 1;
+    let quote = null;
     let j = m.index + m[0].length;
-    for (; j < text.length && depth > 0; j++)
-      depth += text[j] === '(' ? 1 : text[j] === ')' ? -1 : 0;
-    out.push(text.slice(m.index + m[0].length, j));
+    for (; j < text.length && depth > 0; j++) {
+      const c = text[j];
+      if (quote) {
+        if (c === '\\') j++;
+        else if (c === quote) quote = null;
+      } else if (c === "'" || c === '"' || c === '`') quote = c;
+      else depth += c === '(' ? 1 : c === ')' ? -1 : 0;
+    }
+    out.push({ name: m[1], args: splitArgs(text.slice(m.index + m[0].length, j - 1)) });
   }
   return out;
 }
-// Only a scanner command passed to an exec call counts (not one the test merely asserts about a script's text).
-const shellScans = (text) =>
-  /child_process/.test(text) ? scannerLiterals(execArgs(text).join('\n')) : [];
-const shellsOutToScan = (text) => shellScans(text).length > 0;
+const unquote = (a) => a.slice(1, -1);
+// { unreadable: why the test must always run, or null; words: the literal words of its scanner commands }
+const shellOutCache = new Map();
+function shellOuts(text) {
+  if (shellOutCache.has(text)) return shellOutCache.get(text);
+  const result = { unreadable: null, words: [] };
+  if (/child_process/.test(text)) {
+    for (const { name, args } of execCalls(text)) {
+      const [first, second] = args;
+      if (first === undefined || !PLAIN_LITERAL.test(first)) {
+        result.unreadable ??= `${name} command is not a plain string`;
+        continue;
+      }
+      const cmd = unquote(first);
+      if (name === 'execSync' || name === 'exec') {
+        if (/^\s*(?:\S*\/)?(?:ba|z|da)?sh\s+-\w*c\b/.test(cmd))
+          result.unreadable ??= `${name} runs through sh -c`;
+        else if (SCANNER_LIT.test(cmd)) result.words.push(...cmd.split(/\s+/));
+        continue;
+      }
+      // execFile / spawn: a program and an argument list
+      const program = cmd.replace(/^.*\//, '');
+      const scannerish = SCANNER_PROGRAM.test(program);
+      const shellish = SHELL_PROGRAM.test(cmd);
+      if (SCANNER_LIT.test(cmd) && /\s/.test(cmd.trim())) {
+        result.words.push(...cmd.split(/\s+/)); // spawn('grep -rl x lib', { shell: true })
+        continue;
+      }
+      if (!scannerish && !shellish) continue;
+      let argv = null;
+      if (second?.startsWith('[')) {
+        const items = splitArgs(second.slice(1, second.lastIndexOf(']')));
+        if (items.every((a) => PLAIN_LITERAL.test(a))) argv = items.map(unquote);
+      } else if (second === undefined || second.startsWith('{')) argv = [];
+      if (argv === null || shellish) {
+        result.unreadable ??= `${name} ${program} has arguments the script cannot read`;
+      } else if (program !== 'git' || /^(?:grep|ls-files)$/.test(argv[0] ?? '')) {
+        result.words.push(...argv);
+      }
+    }
+  }
+  shellOutCache.set(text, result);
+  return result;
+}
+const shellsOutToScan = (text) => {
+  const sh = shellOuts(text);
+  return sh.unreadable !== null || sh.words.length > 0;
+};
 // Never part of the app's module graph. .crabbox/ holds the sync files crabbox leaves in the checkout on the
 // ROG. packages/docs is a standalone sub-app (own lockfile, outside the pnpm workspace) that no test touches.
 const IGNORED_PREFIXES = [
@@ -127,7 +203,7 @@ function repoFiles() {
 
 // Does test `t` (source `text`) read changed file `f`? Returns why, or null. Only what the test reads counts:
 // a quoted path naming f or its file name, or a folder it scans (readdirSync / import.meta.glob / a shelled-out
-// grep, find, ls) that holds f. A shelled-out scan whose folders cannot be read from the test counts for any code change.
+// grep, find, ls) that holds f. A shell-out the script cannot read in full counts for any code change.
 let baseCounts;
 function baseCount(base) {
   if (!baseCounts) {
@@ -153,15 +229,11 @@ function whyReads(t, text, f) {
     return tail === base && baseCount(base) === 1;
   };
   if (lits.some(names)) return `names ${base}`;
-  const shell = shellsOutToScan(text);
-  if (!shell && !/readdirSync|readdir\(|import\.meta\.glob/.test(text)) return null;
-  // the words of a shell command string are folder candidates too ('grep -rl x app lib')
-  const words = shell
-    ? shellScans(text)
-        .filter((l) => /\s/.test(l))
-        .flatMap((l) => l.split(/\s+/))
-    : [];
-  let sawDir = false;
+  const sh = shellOuts(text);
+  if (sh.unreadable && MODULE_EXT.test(f)) return `shell-out it can't read (${sh.unreadable})`;
+  if (!sh.words.length && !/readdirSync|readdir\(|import\.meta\.glob/.test(text)) return null;
+  // the words of a literal scanner command are folder candidates too ('grep -rl x app lib')
+  const words = sh.words;
   const inside = (dir) => {
     const rel = relative(dir, f);
     return rel !== '' && !rel.startsWith('..') && !rel.startsWith('/');
@@ -187,11 +259,8 @@ function whyReads(t, text, f) {
     const dir = l.startsWith('.') ? resolve(dirname(t), l) : resolve(l);
     // a folder inside the repo, not the repo root or something above it
     if (relative('.', dir) === '' || relative('.', dir).startsWith('..')) continue;
-    if (isDir(dir)) sawDir = true;
     if (isDir(dir) && inside(dir)) return `scans ${relative('.', dir) || '.'}/`;
   }
-  if (shell && !sawDir && MODULE_EXT.test(f))
-    return 'shells out to scan files, folders not readable';
   return null;
 }
 
