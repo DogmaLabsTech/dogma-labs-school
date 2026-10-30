@@ -17,11 +17,12 @@ pnpm dev            # next dev
 pnpm build          # asserts the vendored maic importer, then next build
 pnpm lint           # eslint
 pnpm check          # prettier --check
-pnpm test           # vitest run
+pnpm test           # vitest run (the full suite, T2)
+pnpm test:fast      # only the vitest tests your change touches (T1); full suite when it can't tell
 pnpm test:e2e       # playwright
 ```
 
-Tests run on Benny's ROG, not on homebase. From the repo root, use `crabbox run -- pnpm test`.
+Tests run on Benny's ROG, not on homebase. From the repo root, use `crabbox run -- pnpm test:fast` while working and `crabbox run -- pnpm test` once on the final commit. `pnpm test:fast --dry-run` prints the plan; `--base=<ref>` compares against another ref; playwright stays T2 (`pnpm test:e2e --only-changed`). Script: `scripts/test-fast.mjs`.
 
 Docker: `Dockerfile` and `docker-compose.yml` are upstream's.
 
