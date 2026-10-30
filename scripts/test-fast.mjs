@@ -34,14 +34,32 @@ const OTHER_TEST = /\.test\.(?:[cm]?[jt]s|[jt]sx)$/;
 const READS_FILES = /readFileSync|readdirSync|readdir\(|import\.meta\.glob|readFile\(/;
 // Never part of the app's module graph. .crabbox/ holds the sync files crabbox leaves in the checkout on the
 // ROG. packages/docs is a standalone sub-app (own lockfile, outside the pnpm workspace) that no test touches.
-const IGNORED_PREFIXES = ['.pm/', '.claude/', '.scratch/', '.crabbox/', 'node_modules/', 'packages/docs/'];
+const IGNORED_PREFIXES = [
+  '.pm/',
+  '.claude/',
+  '.scratch/',
+  '.crabbox/',
+  'node_modules/',
+  'packages/docs/',
+];
 // Playwright owns these; vitest never runs them.
 const PLAYWRIGHT = /^(?:e2e\/|playwright\.config\.ts$)/;
 // The workspace packages reach the tests through their built dist/ (package.json main), not through
 // their sources, so an import trace never links a package change to a test.
 const WORKSPACE_PACKAGE = /^packages\//;
 // Folders whose docs are read or served at run time; a doc here that no test names cannot be ruled out.
-const APP_DIRS = ['app/', 'lib/', 'components/', 'public/', 'skills/', 'configs/', 'community/', 'types/', 'assets/', 'eval/'];
+const APP_DIRS = [
+  'app/',
+  'lib/',
+  'components/',
+  'public/',
+  'skills/',
+  'configs/',
+  'community/',
+  'types/',
+  'assets/',
+  'eval/',
+];
 
 const git = (args) => {
   const r = spawnSync('git', args, { encoding: 'utf8' });
@@ -67,12 +85,19 @@ function changedFiles(override) {
   const deleted = status.filter((l) => l.startsWith('D\t')).map((l) => l.slice(2));
   const tracked = status.filter((l) => !l.startsWith('D\t')).map((l) => l.split('\t')[1]);
   const untracked = lines(git(['ls-files', '--others', '--exclude-standard']));
-  const changed = [...new Set([...tracked, ...untracked])].filter(keep).filter((f) => existsSync(f));
+  const changed = [...new Set([...tracked, ...untracked])]
+    .filter(keep)
+    .filter((f) => existsSync(f));
   return { ref: base ? ref : null, changed, deleted: deleted.filter(keep) };
 }
 
 function repoFiles() {
-  return [...new Set([...lines(git(['ls-files'])), ...lines(git(['ls-files', '--others', '--exclude-standard']))])].filter(keep);
+  return [
+    ...new Set([
+      ...lines(git(['ls-files'])),
+      ...lines(git(['ls-files', '--others', '--exclude-standard'])),
+    ]),
+  ].filter(keep);
 }
 
 // Does test `t` (source `text`) read changed file `f`? Returns why, or null. Only what the test reads counts:
@@ -81,14 +106,17 @@ let baseCounts;
 function baseCount(base) {
   if (!baseCounts) {
     baseCounts = new Map();
-    for (const f of repoFiles()) baseCounts.set(basename(f), (baseCounts.get(basename(f)) ?? 0) + 1);
+    for (const f of repoFiles())
+      baseCounts.set(basename(f), (baseCounts.get(basename(f)) ?? 0) + 1);
   }
   return baseCounts.get(base) ?? 0;
 }
 const QUOTED = /(['"`])((?:\\.|(?!\1)[^\\\n])*)\1/g;
 const isDir = (p) => existsSync(p) && statSync(p).isDirectory();
 function whyReads(t, text, f) {
-  const lits = [...text.matchAll(QUOTED)].map((m) => m[2]).filter((l) => l.length > 0 && l.length < 200);
+  const lits = [...text.matchAll(QUOTED)]
+    .map((m) => m[2])
+    .filter((l) => l.length > 0 && l.length < 200);
   const base = basename(f);
   const abs = resolve(f);
   const names = (l) => {
@@ -107,7 +135,14 @@ function whyReads(t, text, f) {
   for (const l of lits) {
     if (/\*/.test(l) && /import\.meta\.glob/.test(text)) {
       const root = l.startsWith('/') ? '.' : dirname(t);
-      const re = new RegExp('^' + resolve(root, l.replace(/^\//, '')).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '(?:.*/)?').replace(/\*/g, '[^/]*') + '$');
+      const re = new RegExp(
+        '^' +
+          resolve(root, l.replace(/^\//, ''))
+            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*\*\//g, '(?:.*/)?')
+            .replace(/\*/g, '[^/]*') +
+          '$',
+      );
       if (re.test(resolve(f))) return `globs ${l}`;
       continue;
     }
@@ -135,8 +170,10 @@ const label = ref ? `against ${ref}` : 'against HEAD (no default branch found)';
 // Playwright files and test files outside the vitest include never reach vitest; say so and set them aside.
 const skipped = [];
 const setAside = (f) => {
-  if (PLAYWRIGHT.test(f)) return skipped.push(`${f} (Playwright, T2: pnpm test:e2e --only-changed)`), true;
-  if (OTHER_TEST.test(f) && !VITEST_TEST.test(f)) return skipped.push(`${f} (a test outside the vitest include, not run by pnpm test)`), true;
+  if (PLAYWRIGHT.test(f))
+    return (skipped.push(`${f} (Playwright, T2: pnpm test:e2e --only-changed)`), true);
+  if (OTHER_TEST.test(f) && !VITEST_TEST.test(f))
+    return (skipped.push(`${f} (a test outside the vitest include, not run by pnpm test)`), true);
   return false;
 };
 const changed = found.changed.filter((f) => !setAside(f));
@@ -147,7 +184,9 @@ const noteSkipped = () => {
 
 if (changed.length === 0 && deleted.length === 0) {
   noteSkipped();
-  console.log(`test:fast: no changed files ${label}${skipped.length ? ' that vitest runs' : ''}, nothing to run.`);
+  console.log(
+    `test:fast: no changed files ${label}${skipped.length ? ' that vitest runs' : ''}, nothing to run.`,
+  );
   process.exit(0);
 }
 
@@ -161,7 +200,9 @@ for (const f of changed) {
   if (FULL_SUITE_TRIGGERS.has(f) || isPackageJson(f)) {
     fullReasons.push(`${f} changed (test config/setup/deps)`);
   } else if (WORKSPACE_PACKAGE.test(f)) {
-    fullReasons.push(`${f} is in a workspace package that the tests use through its built dist/, so its importers cannot be traced`);
+    fullReasons.push(
+      `${f} is in a workspace package that the tests use through its built dist/, so its importers cannot be traced`,
+    );
   } else if (MODULE_EXT.test(f)) {
     modules.push(f);
   }
@@ -178,7 +219,13 @@ const tests = repoFiles()
   .map((t) => ({ t, text: readFileSync(t, 'utf8') }));
 
 // A non-module file (css, html, json, art, docs): tests that read it by path or file name.
-const nonModules = changed.filter((f) => !FULL_SUITE_TRIGGERS.has(f) && !isPackageJson(f) && !WORKSPACE_PACKAGE.test(f) && !MODULE_EXT.test(f));
+const nonModules = changed.filter(
+  (f) =>
+    !FULL_SUITE_TRIGGERS.has(f) &&
+    !isPackageJson(f) &&
+    !WORKSPACE_PACKAGE.test(f) &&
+    !MODULE_EXT.test(f),
+);
 for (const f of nonModules) {
   let hit = false;
   for (const { t, text } of tests) {
@@ -189,7 +236,10 @@ for (const f of nonModules) {
   }
   if (hit) continue;
   if (DOC_EXT.test(f) && !inAppDirs(f)) docsOnly.push(f);
-  else fullReasons.push(`${f} is not a JS/TS module and no test names it, so its effect cannot be traced`);
+  else
+    fullReasons.push(
+      `${f} is not a JS/TS module and no test names it, so its effect cannot be traced`,
+    );
 }
 
 // Tests that read sources as text: imports do not link them, so add the ones whose reads cover a changed module.
@@ -207,7 +257,9 @@ const toRelate = [...new Set([...modules, ...extra])];
 
 noteSkipped();
 if (fullReasons.length === 0 && toRelate.length === 0) {
-  console.log(`test:fast: only docs changed ${label} (${docsOnly.join(', ') || 'none'}), nothing to run.`);
+  console.log(
+    `test:fast: only docs changed ${label} (${docsOnly.join(', ') || 'none'}), nothing to run.`,
+  );
   process.exit(0);
 }
 
@@ -218,7 +270,9 @@ const full = fullReasons.length > 0;
 if (full) {
   for (const why of fullReasons) console.log(`test:fast: ${why}; running the full suite.`);
 } else {
-  console.log(`test:fast: ${changed.length + deleted.length} changed file(s) ${label}; running only the tests that touch them.`);
+  console.log(
+    `test:fast: ${changed.length + deleted.length} changed file(s) ${label}; running only the tests that touch them.`,
+  );
   for (const f of modules) console.log(`  related to ${f}`);
   for (const [t, why] of named) console.log(`  also run: ${t}, it reads: ${why}`);
   for (const [t, why] of readers) console.log(`  always run: reads sources: ${t}, ${why}`);
@@ -245,7 +299,9 @@ function runVitest(vitestArgs, onDone) {
 
 runVitest(full ? fullArgs : relatedArgs, (code, nothingSelected) => {
   if (!full && nothingSelected) {
-    console.log('\ntest:fast: !! 0 tests were selected for these changes; that is not a pass. Running the full suite instead.');
+    console.log(
+      '\ntest:fast: !! 0 tests were selected for these changes; that is not a pass. Running the full suite instead.',
+    );
     runVitest(fullArgs, (fullCode) => process.exit(fullCode));
     return;
   }
