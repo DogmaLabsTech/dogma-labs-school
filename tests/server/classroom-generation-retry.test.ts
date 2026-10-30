@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClassroomAlreadyExistsError } from '@/lib/server/classroom-storage';
 import type { GenerateClassroomInput } from '@/lib/server/classroom-generation';
 
@@ -47,14 +47,24 @@ vi.mock('@/lib/ai/llm', () => ({
   callLLM: mocks.callLLM,
 }));
 
-vi.mock('@openmaic/generation', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@openmaic/generation')>()),
-  generateSceneOutlinesFromRequirements: mocks.generateSceneOutlinesFromRequirements,
-  applyOutlineFallbacks: mocks.applyOutlineFallbacks,
-  generateSceneContent: mocks.generateSceneContent,
-  generateSceneActions: mocks.generateSceneActions,
-  PBLGenerationError: PBLGenerationErrorMock,
-}));
+vi.mock('@openmaic/generation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openmaic/generation')>();
+  return {
+    ...actual,
+    generateSceneOutlinesFromRequirements: mocks.generateSceneOutlinesFromRequirements,
+    applyOutlineFallbacks: mocks.applyOutlineFallbacks,
+    generateSceneContent: mocks.generateSceneContent,
+    generateSceneActions: mocks.generateSceneActions,
+    PBLGenerationError: PBLGenerationErrorMock,
+    // Keep the real retry policy (which errors retry, how often) but skip the real
+    // 1 s+ backoff sleep: it only made each retry test wait on the wall clock.
+    withGenerationRetry: ((operation, options) =>
+      actual.withGenerationRetry(operation, {
+        ...options,
+        sleep: async () => {},
+      })) as typeof actual.withGenerationRetry,
+  };
+});
 
 vi.mock('@/lib/server/scene-generation', () => ({
   createSceneWithActions: mocks.createSceneWithActions,
@@ -117,6 +127,12 @@ async function generateWithProgress(input: Partial<GenerateClassroomInput> = {})
 }
 
 describe('classroom scene generation retries', () => {
+  beforeAll(async () => {
+    // The first import of the generation module graph transforms a lot of source; do it
+    // here so no test pays for it inside its own timeout.
+    await import('@/lib/server/classroom-generation');
+  }, 60_000);
+
   beforeEach(() => {
     for (const mock of Object.values(mocks)) {
       mock.mockReset();
