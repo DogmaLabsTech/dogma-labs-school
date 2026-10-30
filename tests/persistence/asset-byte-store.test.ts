@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { PgAssetStore, ensureAssetSchema, type Queryable } from '@openmaic/storage/asset/pg';
 
@@ -34,9 +34,21 @@ function recordingQueryable(queryable: Queryable, statements: string[]): Queryab
 }
 
 describe('lazyAssetByteStore transactional capability', () => {
-  it('preserves the no-bucket layer transaction-pinned byte methods (the deadlock fix)', async () => {
-    const db = new PGlite();
+  // One PGlite for the file: booting an instance takes 1-2 s (more under load), which
+  // used to be paid inside two tests' own 5 s limit. None of the tests needs its own.
+  let db: PGlite;
+
+  beforeAll(async () => {
+    db = new PGlite();
     await db.waitReady;
+    await ensureAssetSchema(db);
+  }, 60_000);
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it('preserves the no-bucket layer transaction-pinned byte methods (the deadlock fix)', async () => {
     const wrapped = lazyAssetByteStore(undefined, db);
 
     // Red before the fix: the wrapper returned a bare { write, read, delete }
@@ -46,11 +58,9 @@ describe('lazyAssetByteStore transactional capability', () => {
     // when the bytes live in the same PostgreSQL (the self-deadlock).
     expect(hasTransactionalWriter(wrapped)).toBe(true);
     expect('readWith' in wrapped).toBe(true);
-    await db.close();
   });
 
   it('keeps the S3 case free of transactional methods while preserving lazy signing', () => {
-    const db = new PGlite();
     const wrapped = lazyAssetByteStore('valid-bucket-name', db);
 
     // S3 has no transactional writer, so nothing is forwarded there; the
@@ -64,9 +74,6 @@ describe('lazyAssetByteStore transactional capability', () => {
   });
 
   it('routes put() and resolve() byte traffic through the registry transaction when no bucket is configured', async () => {
-    const db = new PGlite();
-    await db.waitReady;
-    await ensureAssetSchema(db);
     const statements: string[] = [];
     const store = new PgAssetStore(db, {
       byteStore: lazyAssetByteStore(undefined, db),
@@ -97,6 +104,5 @@ describe('lazyAssetByteStore transactional capability', () => {
     // the transaction connection, no second-connection read.
     expect(statements.map((sql) => sql.split(' ')[0])).toEqual(['SELECT', 'SELECT', 'SELECT']);
     expect(statements[2]).toContain('SELECT bytes FROM asset_blobs');
-    await db.close();
   });
 });

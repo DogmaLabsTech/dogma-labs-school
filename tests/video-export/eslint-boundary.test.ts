@@ -1,5 +1,5 @@
 import { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 const BOUNDARY_RULE = 'no-restricted-syntax';
 const eslint = new ESLint({ cwd: process.cwd() });
@@ -14,6 +14,12 @@ async function boundaryErrors(code: string): Promise<string[]> {
 }
 
 describe('Hyperframes emitter lint boundary', () => {
+  beforeAll(async () => {
+    // The first lint loads and compiles the whole eslint.config.mjs; do it here so no
+    // test pays for it inside its own timeout.
+    await boundaryErrors('export const warm = 1;');
+  }, 60_000);
+
   it('allows only in-module relatives and the shared pure Quiz math renderer', async () => {
     const errors = await boundaryErrors(`
       import type { VideoTimeline } from '../ir';

@@ -1,5 +1,5 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DSL_VERSION } from '@openmaic/dsl';
 import { BrowserRuntimeStore, type KVStore, type RuntimeStore } from '@openmaic/storage';
 
@@ -154,6 +154,30 @@ function stubMemoryLocalStorage(): void {
 }
 
 describe('database runtime chat integration', () => {
+  beforeAll(async () => {
+    // The first import of the database/storage module graph transforms a lot of source;
+    // do it here (with the same browser stubs the tests use) so no test pays for it
+    // inside its own timeout. Each test still re-imports after vi.resetModules, but from
+    // vite's warm transform cache.
+    vi.stubGlobal('indexedDB', new IDBFactory());
+    vi.stubGlobal('navigator', { locks: serialLockManager() });
+    stubMemoryLocalStorage();
+    try {
+      await Promise.all([
+        import('@/lib/utils/database'),
+        import('@/lib/utils/chat-storage'),
+        import('@/lib/utils/chat-storage-lock'),
+        import('@/lib/utils/stage-storage'),
+        import('@/lib/utils/deleted-stages'),
+        import('@/lib/document-store'),
+        import('@/lib/runtime/store'),
+        import('dexie'),
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 60_000);
+
   beforeEach(() => {
     vi.resetModules();
     vi.stubGlobal('indexedDB', new IDBFactory());

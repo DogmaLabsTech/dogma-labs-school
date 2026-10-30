@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetStageRealmPresenceForTesting,
   bindStageRealmPresence,
@@ -9,19 +9,44 @@ import {
  * A peer realm is modelled with its own channel: it answers presence probes the
  * way a second tab's bound module would.
  */
-function peerHoldingStage(stageId: string): BroadcastChannel {
+function peerHoldingStage(stageId: string, onProbe: () => void = () => {}): BroadcastChannel {
   const peer = new BroadcastChannel('maic-stage-presence');
   peer.onmessage = (event: MessageEvent) => {
     const message = event.data;
-    if (message?.kind === 'probe' && message.stageId === stageId) {
+    if (message?.kind !== 'probe') return;
+    onProbe();
+    if (message.stageId === stageId) {
       peer.postMessage({ kind: 'present', stageId, probeId: message.probeId });
     }
   };
   return peer;
 }
 
+// The probe gives a peer PROBE_TIMEOUT_MS (60 ms of wall clock) to answer, which a loaded
+// machine can miss. The tests therefore own that clock: only setTimeout/clearTimeout are
+// faked, so the real BroadcastChannel delivery still runs, and a test lets the probe time
+// out (`expireProbe`) only once the peer has had every chance to answer.
+const realSetTimeout = globalThis.setTimeout;
+const realWait = (ms: number) => new Promise<void>((resolve) => realSetTimeout(resolve, ms));
+
+async function expireProbe(peerSawProbe?: Promise<void>): Promise<void> {
+  if (peerSawProbe) {
+    await peerSawProbe;
+    // Let any answer the peer posted reach the probe before it is allowed to time out.
+    await realWait(20);
+  }
+  vi.runOnlyPendingTimers();
+}
+
 describe('stage realm presence', () => {
-  afterEach(() => __resetStageRealmPresenceForTesting());
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    __resetStageRealmPresenceForTesting();
+  });
 
   it('reports a peer that has the same stage open', async () => {
     bindStageRealmPresence(() => 'stage-1');
@@ -36,10 +61,16 @@ describe('stage realm presence', () => {
 
   it('reports no peer when the other realm holds a different stage', async () => {
     bindStageRealmPresence(() => 'stage-1');
-    const peer = peerHoldingStage('stage-other');
+    let sawProbe!: () => void;
+    const peerSawProbe = new Promise<void>((resolve) => {
+      sawProbe = resolve;
+    });
+    const peer = peerHoldingStage('stage-other', sawProbe);
 
     try {
-      expect(await probeStageRealmPresence('stage-1')).toBe('absent');
+      const probing = probeStageRealmPresence('stage-1');
+      await expireProbe(peerSawProbe);
+      expect(await probing).toBe('absent');
     } finally {
       peer.close();
     }
@@ -48,7 +79,9 @@ describe('stage realm presence', () => {
   it('reports no peer when nobody answers', async () => {
     bindStageRealmPresence(() => 'stage-1');
 
-    expect(await probeStageRealmPresence('stage-1')).toBe('absent');
+    const probing = probeStageRealmPresence('stage-1');
+    await expireProbe();
+    expect(await probing).toBe('absent');
   });
 
   it('reports unknown when the environment has no BroadcastChannel', async () => {
