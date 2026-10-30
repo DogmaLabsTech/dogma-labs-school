@@ -32,9 +32,9 @@ const VITEST_TEST = /^tests\/.*\.test\.ts$/;
 const OTHER_TEST = /\.test\.(?:[cm]?[jt]s|[jt]sx)$/;
 // A test that reads files as text sees changes imports cannot show (source guards, css and doc checks).
 const READS_FILES = /readFileSync|readdirSync|readdir\(|import\.meta\.glob|readFile\(/;
-// Never part of the app's module graph. packages/docs is a standalone sub-app (own lockfile, outside the
-// pnpm workspace) that no test touches.
-const IGNORED_PREFIXES = ['.pm/', '.claude/', '.scratch/', 'node_modules/', 'packages/docs/'];
+// Never part of the app's module graph. .crabbox/ holds the sync files crabbox leaves in the checkout on the
+// ROG. packages/docs is a standalone sub-app (own lockfile, outside the pnpm workspace) that no test touches.
+const IGNORED_PREFIXES = ['.pm/', '.claude/', '.scratch/', '.crabbox/', 'node_modules/', 'packages/docs/'];
 // Playwright owns these; vitest never runs them.
 const PLAYWRIGHT = /^(?:e2e\/|playwright\.config\.ts$)/;
 // The workspace packages reach the tests through their built dist/ (package.json main), not through
