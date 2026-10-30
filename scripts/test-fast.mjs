@@ -32,6 +32,31 @@ const VITEST_TEST = /^tests\/.*\.test\.ts$/;
 const OTHER_TEST = /\.test\.(?:[cm]?[jt]s|[jt]sx)$/;
 // A test that reads files as text sees changes imports cannot show (source guards, css and doc checks).
 const READS_FILES = /readFileSync|readdirSync|readdir\(|import\.meta\.glob|readFile\(/;
+// A test can also scan sources by shelling out (execSync('grep -rl ... app lib')). It must import child_process,
+// call an exec function (not RegExp.exec) and hold a string that is a scanner command: one that starts with
+// grep, rg, find, ls, git grep or git ls-files, follows a pipe or &&, or is just the program name for spawn.
+const EXEC_CALL = /(?<![.\w])(?:execSync|execFileSync|spawnSync|execFile|exec|spawn)\s*\(/;
+const SCANNER_LIT =
+  /^\s*(?:(?:grep|rg|find|ls)(?:\s|$)|git\s+(?:grep|ls-files)\b)|(?:\||&&|;)\s*(?:grep|rg|find|ls)\s/;
+const scannerLiterals = (text) =>
+  [...text.matchAll(QUOTED)].map((m) => m[2]).filter((l) => SCANNER_LIT.test(l));
+// The argument text of each exec call, up to its closing paren.
+function execArgs(text) {
+  const out = [];
+  const re = new RegExp(EXEC_CALL.source, 'g');
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    let depth = 1;
+    let j = m.index + m[0].length;
+    for (; j < text.length && depth > 0; j++)
+      depth += text[j] === '(' ? 1 : text[j] === ')' ? -1 : 0;
+    out.push(text.slice(m.index + m[0].length, j));
+  }
+  return out;
+}
+// Only a scanner command passed to an exec call counts (not one the test merely asserts about a script's text).
+const shellScans = (text) =>
+  /child_process/.test(text) ? scannerLiterals(execArgs(text).join('\n')) : [];
+const shellsOutToScan = (text) => shellScans(text).length > 0;
 // Never part of the app's module graph. .crabbox/ holds the sync files crabbox leaves in the checkout on the
 // ROG. packages/docs is a standalone sub-app (own lockfile, outside the pnpm workspace) that no test touches.
 const IGNORED_PREFIXES = [
@@ -101,7 +126,8 @@ function repoFiles() {
 }
 
 // Does test `t` (source `text`) read changed file `f`? Returns why, or null. Only what the test reads counts:
-// a quoted path naming f or its file name, or a folder it scans (readdirSync / import.meta.glob) that holds f.
+// a quoted path naming f or its file name, or a folder it scans (readdirSync / import.meta.glob / a shelled-out
+// grep, find, ls) that holds f. A shelled-out scan whose folders cannot be read from the test counts for any code change.
 let baseCounts;
 function baseCount(base) {
   if (!baseCounts) {
@@ -127,12 +153,20 @@ function whyReads(t, text, f) {
     return tail === base && baseCount(base) === 1;
   };
   if (lits.some(names)) return `names ${base}`;
-  if (!/readdirSync|readdir\(|import\.meta\.glob/.test(text)) return null;
+  const shell = shellsOutToScan(text);
+  if (!shell && !/readdirSync|readdir\(|import\.meta\.glob/.test(text)) return null;
+  // the words of a shell command string are folder candidates too ('grep -rl x app lib')
+  const words = shell
+    ? shellScans(text)
+        .filter((l) => /\s/.test(l))
+        .flatMap((l) => l.split(/\s+/))
+    : [];
+  let sawDir = false;
   const inside = (dir) => {
     const rel = relative(dir, f);
     return rel !== '' && !rel.startsWith('..') && !rel.startsWith('/');
   };
-  for (const l of lits) {
+  for (const l of [...lits, ...words]) {
     if (/\*/.test(l) && /import\.meta\.glob/.test(text)) {
       const root = l.startsWith('/') ? '.' : dirname(t);
       const re = new RegExp(
@@ -153,8 +187,11 @@ function whyReads(t, text, f) {
     const dir = l.startsWith('.') ? resolve(dirname(t), l) : resolve(l);
     // a folder inside the repo, not the repo root or something above it
     if (relative('.', dir) === '' || relative('.', dir).startsWith('..')) continue;
+    if (isDir(dir)) sawDir = true;
     if (isDir(dir) && inside(dir)) return `scans ${relative('.', dir) || '.'}/`;
   }
+  if (shell && !sawDir && MODULE_EXT.test(f))
+    return 'shells out to scan files, folders not readable';
   return null;
 }
 
@@ -246,7 +283,7 @@ for (const f of nonModules) {
 const readers = new Map(); // test file -> why
 for (const f of modules) {
   for (const { t, text } of tests) {
-    if (!READS_FILES.test(text) || readers.has(t) || t === f) continue;
+    if (!(READS_FILES.test(text) || shellsOutToScan(text)) || readers.has(t) || t === f) continue;
     const why = whyReads(t, text, f);
     if (why) readers.set(t, `${why} (${f})`);
   }
