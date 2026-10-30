@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 import { convertToLlm } from '@earendil-works/pi-agent-core';
 
@@ -446,6 +446,13 @@ function mockDirectorWithFailedSceneRead() {
 }
 
 describe('POST /api/chat/pi cue_user', () => {
+  beforeAll(async () => {
+    // The first import of the route transforms a large module graph; do it here so the
+    // first test does not pay for it inside its own timeout. Each test still re-imports
+    // after vi.resetModules, but from vite's warm transform cache.
+    await import('@/app/api/chat/pi/route');
+  }, 60_000);
+
   beforeEach(() => {
     originalPiChatFlag = process.env[PI_CHAT_FLAG];
     process.env[PI_CHAT_FLAG] = 'true';

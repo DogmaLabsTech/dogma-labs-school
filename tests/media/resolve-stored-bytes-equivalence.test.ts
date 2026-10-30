@@ -480,7 +480,8 @@ async function capture(run: () => Promise<Blob | null>, row?: MediaFileRecord): 
   }
 }
 
-describe('frozen-base differential harness', () => {
+// The three matrices are pure compute (about 1-2 s each alone); a loaded full run pushes them past the 5 s default.
+describe('frozen-base differential harness', { timeout: 30_000 }, () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.mediaGet.mockResolvedValue(undefined);

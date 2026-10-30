@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { SceneOutline } from '@/lib/types/generation';
 
 const mocks = vi.hoisted(() => ({
@@ -88,6 +88,12 @@ function jsonResponse(status: number, body: unknown) {
 }
 
 describe('browser scene generation retry wrappers', () => {
+  beforeAll(async () => {
+    // The first import of the scene generator transforms a large module graph; do it
+    // here so the first test does not pay for it inside its own timeout.
+    await import('@/lib/hooks/use-scene-generator');
+  }, 60_000);
+
   beforeEach(() => {
     mockFetch.mockReset();
     mocks.audioPut.mockReset();

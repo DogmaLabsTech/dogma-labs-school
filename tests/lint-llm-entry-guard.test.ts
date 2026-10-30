@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { ESLint } from 'eslint';
 
 /**
@@ -70,6 +70,15 @@ async function errorsFor(filePath: string, code: string): Promise<string[]> {
 }
 
 describe('LLM entry-point lint guard — coverage matrix', () => {
+  beforeAll(async () => {
+    // The first lint loads and compiles the whole eslint.config.mjs (parser, plugins,
+    // rule sets); do it here so no test pays for it inside its own timeout.
+    await eslint.lintText('export const warm = 1;\n', {
+      filePath: 'lib/server/probe.ts',
+      warnIgnored: false,
+    });
+  }, 60_000);
+
   for (const [form, code] of Object.entries(BYPASS_FORMS)) {
     for (const ext of EXTENSIONS) {
       // A namespace or named import of a value is not valid in a .cjs/.mjs mix

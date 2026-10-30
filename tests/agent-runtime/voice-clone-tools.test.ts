@@ -427,8 +427,17 @@ describe('voice clone agent tools', () => {
       endSec: 3,
     } as never);
 
-    expect(clipAudio).toHaveBeenCalledWith(sourceAudio, 'mat_source.mp4', 1, 3);
-    expect(storeRawAsset).toHaveBeenCalledWith('ses_1', clipWav, 'audio/wav');
+    // The buffers are large; vitest's deep equality walks them byte by byte (~2 s under
+    // load). They are the very objects handed through, so assert identity, which is
+    // stricter than equality and costs nothing.
+    expect(clipAudio).toHaveBeenCalledTimes(1);
+    const [clippedBytes, ...clipArgs] = clipAudio.mock.calls[0]!;
+    expect(clippedBytes).toBe(sourceAudio);
+    expect(clipArgs).toEqual(['mat_source.mp4', 1, 3]);
+    expect(storeRawAsset).toHaveBeenCalledTimes(1);
+    const [storedSession, storedBytes, storedMime] = storeRawAsset.mock.calls[0]!;
+    expect(storedBytes).toBe(clipWav);
+    expect([storedSession, storedMime]).toEqual(['ses_1', 'audio/wav']);
     expect(createMaterial).toHaveBeenCalledWith(
       'ses_1',
       expect.objectContaining({
